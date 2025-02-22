@@ -36,17 +36,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # Ensure upload folder exists
 # class ResponseRequest(BaseModel):
     # docs_choice: int
 
-# Store the last response in memory
-latest_response: Optional[Dict[str, Any]] = None
-
-@app.get("/")
-def read_root():
-    if latest_response is None:
-        return {"message": "FastAPI is running! No response available yet."}
-    return latest_response
 
 
-app = FastAPI()
 
 BASE_UPLOAD_FOLDER = "uploads"
 USER_FOLDER = os.path.join(BASE_UPLOAD_FOLDER, "user")
@@ -55,6 +46,15 @@ COMPETITOR_FOLDER = os.path.join(BASE_UPLOAD_FOLDER, "competitor")
 # Ensure upload directories exist
 os.makedirs(USER_FOLDER, exist_ok=True)
 os.makedirs(COMPETITOR_FOLDER, exist_ok=True)
+
+# Store the last response in memory
+response: Optional[Dict[str, Any]] = None
+
+@app.get("/")
+def read_root():
+    if response is None:
+        return {"message": "FastAPI is running! No response available yet."}
+    return response
 
 @app.post("/upload/")
 async def upload_files(
@@ -175,7 +175,8 @@ def init_session():
             f"User Product Data:\n{user_data_retriever}\n\nCompetitor Product Data:\n{competitor_data_retriever}"
         )
 
-        response = model.invoke(system_prompt)
+        response_message = model.invoke(system_prompt)
+        response = {"message": response_message.content}
 
         return response
     
