@@ -71,14 +71,15 @@ async def upload_files(
 
     def save_files(files, folder, category):
         for file in files:
-            if not file.filename or not file.filename.endswith(".pdf"):
-                raise HTTPException(status_code=400, detail=f"Invalid file format: {file.filename}. Only PDFs are allowed.")
+            if not file.filename:
+                raise HTTPException(status_code=400, detail=f"Invalid file format: {file.filename}.")
 
             file_path = os.path.join(folder, os.path.basename(file.filename))  # Secure filename usage
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
             uploaded_files[category].append(file.filename)
+
 
     # Save user and competitor files separately
     if user_files:
