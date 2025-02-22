@@ -3,18 +3,16 @@ from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import sys
-if "railway" not in sys.platform:
-    import tkinter as tk
-    from tkinter import filedialog
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader, Docx2txtLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile,File
 from pydantic import BaseModel
-from typing import Dict,Optional,Any
+from typing import Dict,Optional,Any, List
 from langchain_community.document_loaders import UnstructuredExcelLoader
 import uvicorn
 import os
+import shutil
 
 from dotenv import load_dotenv
 
@@ -23,50 +21,77 @@ load_dotenv()
 
 app = FastAPI()
 
+UPLOAD_FOLDER = "uploaded_files"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # Ensure upload folder exists
+
 class ResponseRequest(BaseModel):
     docs_choice: int
 
-# # Store the last response in memory
-# response: Optional[Dict[str, Any]] = None
+# Store the last response in memory
+latest_response: Optional[Dict[str, Any]] = None
 
-def data(docs_choice):
-    root = tk.Tk()
-    root.withdraw()  # Hide the main window
-    root.call('wm', 'attributes', '.', '-topmost', True)  # Bring dialog to front
+@app.get("/")
+def read_root():
+    if latest_response is None:
+        return {"message": "FastAPI is running! No response available yet."}
+    return latest_response
+
+@app.post("/upload/")
+async def upload_file(files: List[UploadFile] = File(...)):
+    """
+    Endpoint to upload multiple PDF files.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files selected.")
+
+    uploaded_files = []
+
+    for file in files:
+        if file.filename is None or not file.filename.endswith(".pdf"):
+            raise HTTPException(status_code=400, detail=f"Invalid file format: {file.filename}. Only PDFs are allowed.")
+
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="File name is missing.")
+        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+
+        # Save file to server
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        uploaded_files.append(file.filename)
+
+    return {"uploaded_files": uploaded_files, "message": "Files uploaded successfully."}
+
+def data():
+    uploaded_files = os.listdir(UPLOAD_FOLDER)
+    if not uploaded_files:
+        raise HTTPException(status_code=400, detail="No files found. Please upload files first.")
 
     all_splits = []
-    
-    for _ in range(docs_choice):
-        file_path = filedialog.askopenfilename(filetypes=[
-            ("All Supported Files", "*.pdf;*.txt;*.xlsx;*.csv;*.docx"),
-            ("PDF Files", "*.pdf"),
-            ("Text Files", "*.txt"),
-            ("Excel Files", "*.xlsx"),
-            ("CSV Files", "*.csv"),
-            ("Word Files", "*.docx")
-        ])
 
-        if not file_path:
-            raise HTTPException(status_code=400, detail="No file selected.")
+    # Supported file extensions and their respective loaders
+    loaders = {
+        ".pdf": PyPDFLoader,
+        ".txt": TextLoader,
+        ".csv": CSVLoader,
+        ".docx": Docx2txtLoader,
+        ".xlsx": UnstructuredExcelLoader
+    }
 
-        ext = os.path.splitext(file_path)[1].lower()
+    # Process uploaded files
+    for file_name in uploaded_files:
+        file_path = os.path.join(UPLOAD_FOLDER, file_name)
+        ext = os.path.splitext(file_name)[1].lower()
 
-        if ext == ".pdf":
-            loader = PyPDFLoader(file_path)
-        elif ext == ".txt":
-            loader = TextLoader(file_path)
-        elif ext == ".csv":
-            loader = CSVLoader(file_path)
-        elif ext == ".docx":
-            loader = Docx2txtLoader(file_path)
-        elif ext == ".xlsx":
-            loader = UnstructuredExcelLoader(file_path)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file type.")
+        if ext not in loaders:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
+        loader = loaders[ext](file_path)
         docs = loader.load()
+
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         splits = text_splitter.split_documents(docs)
+
         all_splits.extend(splits)
 
     if not all_splits:
@@ -77,11 +102,6 @@ def data(docs_choice):
 
     return vectorstore.as_retriever()
 
-@app.get("/")
-def read_root():
-    if response is None:
-        return {"message": "FastAPI is running! No response available yet."}
-    return response
 @app.post("/response")
 def init_session(request: ResponseRequest):
     try:
@@ -93,8 +113,8 @@ def init_session(request: ResponseRequest):
         model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
 
 
-        user_data_retriever = data(docs_choice)
-        competitor_data_retriever = data(docs_choice)
+        user_data_retriever = data()
+        competitor_data_retriever = data()
 
         # System prompt for LLM
         system_prompt = (
