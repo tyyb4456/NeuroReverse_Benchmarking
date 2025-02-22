@@ -8,6 +8,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
 from fastapi import FastAPI, HTTPException, Query, UploadFile,File
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict,Optional,Any, List
 from langchain_community.document_loaders import UnstructuredExcelLoader
 import uvicorn
@@ -20,6 +21,14 @@ load_dotenv()
 
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Change to "*" if testing
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 UPLOAD_FOLDER = "uploaded_files"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # Ensure upload folder exists
