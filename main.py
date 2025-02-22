@@ -24,8 +24,8 @@ app = FastAPI()
 UPLOAD_FOLDER = "uploaded_files"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # Ensure upload folder exists
 
-class ResponseRequest(BaseModel):
-    docs_choice: int
+# class ResponseRequest(BaseModel):
+    # docs_choice: int
 
 # Store the last response in memory
 latest_response: Optional[Dict[str, Any]] = None
@@ -36,40 +36,64 @@ def read_root():
         return {"message": "FastAPI is running! No response available yet."}
     return latest_response
 
+
+app = FastAPI()
+
+BASE_UPLOAD_FOLDER = "uploads"
+USER_FOLDER = os.path.join(BASE_UPLOAD_FOLDER, "user")
+COMPETITOR_FOLDER = os.path.join(BASE_UPLOAD_FOLDER, "competitor")
+
+# Ensure upload directories exist
+os.makedirs(USER_FOLDER, exist_ok=True)
+os.makedirs(COMPETITOR_FOLDER, exist_ok=True)
+
 @app.post("/upload/")
-async def upload_file(files: List[UploadFile] = File(...)):
+async def upload_files(
+    user_files: List[UploadFile] = File(None), 
+    competitor_files: List[UploadFile] = File(None)
+):
     """
-    Endpoint to upload multiple PDF files.
+    Upload files for both user and competitor in a single request.
     """
-    if not files:
-        raise HTTPException(status_code=400, detail="No files selected.")
+    if not user_files and not competitor_files:
+        raise HTTPException(status_code=400, detail="No files provided.")
 
-    uploaded_files = []
+    uploaded_files = {"user": [], "competitor": []}
 
-    for file in files:
-        if file.filename is None or not file.filename.endswith(".pdf"):
-            raise HTTPException(status_code=400, detail=f"Invalid file format: {file.filename}. Only PDFs are allowed.")
+    def save_files(files, folder, category):
+        for file in files:
+            if not file.filename or not file.filename.endswith(".pdf"):
+                raise HTTPException(status_code=400, detail=f"Invalid file format: {file.filename}. Only PDFs are allowed.")
 
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="File name is missing.")
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+            file_path = os.path.join(folder, os.path.basename(file.filename))  # Secure filename usage
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
-        # Save file to server
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            uploaded_files[category].append(file.filename)
 
-        uploaded_files.append(file.filename)
+    # Save user and competitor files separately
+    if user_files:
+        save_files(user_files, USER_FOLDER, "user")
 
-    return {"uploaded_files": uploaded_files, "message": "Files uploaded successfully."}
+    if competitor_files:
+        save_files(competitor_files, COMPETITOR_FOLDER, "competitor")
 
-def data():
-    uploaded_files = os.listdir(UPLOAD_FOLDER)
+    return {
+        "uploaded_files": uploaded_files,
+        "message": "Files uploaded successfully for user and competitor."
+    }
+
+def load_and_process_files(data_type: str):
+    """
+    Process uploaded files separately for user and competitor.
+    """
+    folder = USER_FOLDER if data_type == "user" else COMPETITOR_FOLDER
+    uploaded_files = os.listdir(folder)
+
     if not uploaded_files:
-        raise HTTPException(status_code=400, detail="No files found. Please upload files first.")
+        raise HTTPException(status_code=400, detail=f"No {data_type} files found. Please upload files first.")
 
     all_splits = []
-
-    # Supported file extensions and their respective loaders
     loaders = {
         ".pdf": PyPDFLoader,
         ".txt": TextLoader,
@@ -78,24 +102,25 @@ def data():
         ".xlsx": UnstructuredExcelLoader
     }
 
-    # Process uploaded files
     for file_name in uploaded_files:
-        file_path = os.path.join(UPLOAD_FOLDER, file_name)
+        file_path = os.path.join(folder, file_name)
         ext = os.path.splitext(file_name)[1].lower()
 
         if ext not in loaders:
-            raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+            print(f"Skipping unsupported file type: {file_name}")  # Logging unsupported files
+            continue
 
-        loader = loaders[ext](file_path)
-        docs = loader.load()
-
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        splits = text_splitter.split_documents(docs)
-
-        all_splits.extend(splits)
+        try:
+            loader = loaders[ext](file_path)
+            docs = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            splits = text_splitter.split_documents(docs)
+            all_splits.extend(splits)
+        except Exception as e:
+            print(f"Error processing {file_name}: {str(e)}")  # Debugging output
 
     if not all_splits:
-        raise HTTPException(status_code=400, detail="No valid documents processed.")
+        raise HTTPException(status_code=400, detail=f"No valid documents processed for {data_type}.")
 
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vectorstore = FAISS.from_documents(documents=all_splits, embedding=embeddings)
@@ -103,18 +128,16 @@ def data():
     return vectorstore.as_retriever()
 
 @app.post("/response")
-def init_session(request: ResponseRequest):
+def init_session():
     try:
-        docs_choice = request.docs_choice
-
         global response
         response = None
 
         model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
 
-
-        user_data_retriever = data()
-        competitor_data_retriever = data()
+        # Load data separately for user and competitor
+        user_data_retriever = load_and_process_files("user")
+        competitor_data_retriever = load_and_process_files("competitor")
 
         # System prompt for LLM
         system_prompt = (
