@@ -14,6 +14,62 @@ from langchain_community.document_loaders import UnstructuredExcelLoader
 import uvicorn
 import os
 import shutil
+from typing import Optional, List
+from langchain.llms.base import LLM
+from pydantic import BaseModel, Field
+from ibm_watsonx_ai import Credentials
+from ibm_watsonx_ai.foundation_models import ModelInference
+from ibm_watsonx_ai.metanames import GenTextParamsMetaNames as GenParams
+from ibm_watsonx_ai.foundation_models.utils.enums import ModelTypes, DecodingMethods
+
+
+class WatsonxGraniteLLM(LLM, BaseModel):
+    model_id: str = "mistralai/mixtral-8x7b-instruct-v01"
+    api_key: str = Field(..., description="IBM Watson API Key")
+    url: str = "https://us-south.ml.cloud.ibm.com"
+    project_id: Optional[str] = None
+
+    class Config:
+        arbitrary_types_allowed = True
+    def __init__(self, api_key: str, project_id: Optional[str] = None, **kwargs):
+        # Explicitly initialize both parent classes
+        # super().__init__(**kwargs)  # Initialize LLM (if needed)
+        BaseModel.__init__(self, api_key=api_key, project_id=project_id, **kwargs)
+
+        
+        self.api_key = api_key
+        self.project_id = project_id
+
+    @property
+    def _llm_type(self) -> str:
+        return "IBM Watsonx Granite"
+
+    def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
+        gen_params = {
+            GenParams.DECODING_METHOD: DecodingMethods.GREEDY,
+            GenParams.TEMPERATURE: 0.8,
+            GenParams.MIN_NEW_TOKENS: 10,
+            GenParams.MAX_NEW_TOKENS: 1024
+        }
+
+        credentials = Credentials(api_key=self.api_key, url=self.url)
+
+        model_inference = ModelInference(
+            model_id=self.model_id,
+            params=gen_params,
+            credentials=credentials,
+            project_id=self.project_id
+        )
+
+        response = model_inference.generate(prompt)
+        results = response.get('results', [])
+        generated_texts = [item.get('generated_text') for item in results]
+
+        return generated_texts[0] if generated_texts else ""
+    
+# Example Usage
+watson_llm = WatsonxGraniteLLM(api_key="RHut0-MsgooOcbwOdcMOEPJCPYD4QwmVRi9kZfDwROB4", 
+                               project_id="52580b6a-fb5b-45b8-ad43-bd55253c87ba")
 
 from dotenv import load_dotenv
 
@@ -172,8 +228,8 @@ def init_session():
             f"User Product Data:\n{user_docs}\n\nCompetitor Product Data:\n{competitor_docs}"
         )
 
-        response_message = model.invoke(system_prompt)
-        response = {"message": response_message.content}
+        response_message = watson_llm.invoke(system_prompt)
+        response = {"message": response_message}
 
         return response
 
