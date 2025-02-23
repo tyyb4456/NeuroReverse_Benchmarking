@@ -22,6 +22,14 @@ from ibm_watsonx_ai.foundation_models import ModelInference
 from ibm_watsonx_ai.metanames import GenTextParamsMetaNames as GenParams
 from ibm_watsonx_ai.foundation_models.utils.enums import ModelTypes, DecodingMethods
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_KEY = os.getenv("WATSON_API_KEY")
+PROJECT_ID = os.getenv("WATSON_PROJECT_ID")
+
+
 
 class WatsonxGraniteLLM(LLM, BaseModel):
     model_id: str = "mistralai/mixtral-8x7b-instruct-v01"
@@ -68,12 +76,11 @@ class WatsonxGraniteLLM(LLM, BaseModel):
         return generated_texts[0] if generated_texts else ""
     
 # Example Usage
-watson_llm = WatsonxGraniteLLM(api_key="RHut0-MsgooOcbwOdcMOEPJCPYD4QwmVRi9kZfDwROB4", 
-                               project_id="52580b6a-fb5b-45b8-ad43-bd55253c87ba")
+if API_KEY is None:
+    raise ValueError("WATSON_API_KEY environment variable is not set")
 
-from dotenv import load_dotenv
-
-load_dotenv()
+watson_llm = WatsonxGraniteLLM(api_key=API_KEY, 
+                               project_id=PROJECT_ID)
 
 
 app = FastAPI()
@@ -99,7 +106,9 @@ response: Optional[Dict[str, Any]] = None  # Store last response in memory
 
 @app.get("/")
 def read_root():
-    return {"message": "FastAPI is running!", "last_response": response}
+    if response is None:
+        return {"message": "FastAPI is running!", "last_response": response}
+    return response
 
 @app.post("/upload/")
 async def upload_files(
