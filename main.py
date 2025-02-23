@@ -22,39 +22,28 @@ load_dotenv()
 
 app = FastAPI()
 
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change to "*" if testing
+    allow_origins=["*"],  # Change as needed for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-UPLOAD_FOLDER = "uploaded_files"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)  # Ensure upload folder exists
-
-# class ResponseRequest(BaseModel):
-    # docs_choice: int
-
-
-
-
+# Define upload directories
 BASE_UPLOAD_FOLDER = "uploads"
 USER_FOLDER = os.path.join(BASE_UPLOAD_FOLDER, "user")
 COMPETITOR_FOLDER = os.path.join(BASE_UPLOAD_FOLDER, "competitor")
 
-# Ensure upload directories exist
 os.makedirs(USER_FOLDER, exist_ok=True)
 os.makedirs(COMPETITOR_FOLDER, exist_ok=True)
 
-# Store the last response in memory
-response: Optional[Dict[str, Any]] = None
+response: Optional[Dict[str, Any]] = None  # Store last response in memory
 
 @app.get("/")
 def read_root():
-    if response is None:
-        return {"message": "FastAPI is running! No response available yet."}
-    return response
+    return {"message": "FastAPI is running!", "last_response": response}
 
 @app.post("/upload/")
 async def upload_files(
@@ -62,35 +51,34 @@ async def upload_files(
     competitor_files: List[UploadFile] = File(None)
 ):
     """
-    Upload files for both user and competitor in a single request.
+    Uploads new files and deletes previous files before saving the new ones.
     """
     if not user_files and not competitor_files:
         raise HTTPException(status_code=400, detail="No files provided.")
 
     uploaded_files = {"user": [], "competitor": []}
 
-    def save_files(files, folder, category):
+    def clear_and_save_files(files, folder, category):
+        # Remove previous files
+        for existing_file in os.listdir(folder):
+            os.remove(os.path.join(folder, existing_file))
+
+        # Save new files
         for file in files:
-            if not file.filename:
-                raise HTTPException(status_code=400, detail=f"Invalid file format: {file.filename}.")
+            if file.filename:
+                file_path = os.path.join(folder, os.path.basename(file.filename))  # Secure filename usage
+                with open(file_path, "wb") as buffer:
+                    shutil.copyfileobj(file.file, buffer)
+                uploaded_files[category].append(file.filename)
 
-            file_path = os.path.join(folder, os.path.basename(file.filename))  # Secure filename usage
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-
-            uploaded_files[category].append(file.filename)
-
-
-    # Save user and competitor files separately
     if user_files:
-        save_files(user_files, USER_FOLDER, "user")
-
+        clear_and_save_files(user_files, USER_FOLDER, "user")
     if competitor_files:
-        save_files(competitor_files, COMPETITOR_FOLDER, "competitor")
+        clear_and_save_files(competitor_files, COMPETITOR_FOLDER, "competitor")
 
     return {
         "uploaded_files": uploaded_files,
-        "message": "Files uploaded successfully for user and competitor."
+        "message": "Previous files removed. New files uploaded successfully."
     }
 
 def load_and_process_files(data_type: str):
@@ -132,6 +120,7 @@ def load_and_process_files(data_type: str):
     if not all_splits:
         raise HTTPException(status_code=400, detail=f"No valid documents processed for {data_type}.")
 
+    # Generate embeddings and vector store
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vectorstore = FAISS.from_documents(documents=all_splits, embedding=embeddings)
 
@@ -139,17 +128,24 @@ def load_and_process_files(data_type: str):
 
 @app.post("/response")
 def init_session():
-    try:
-        global response
-        response = None
+    global response
+    response = None
 
+    try:
         model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
 
         # Load data separately for user and competitor
         user_data_retriever = load_and_process_files("user")
         competitor_data_retriever = load_and_process_files("competitor")
 
-        # System prompt for LLM
+        # Retrieve relevant documents
+        user_docs = user_data_retriever.get_relevant_documents("Extract key product features and specifications.")
+        competitor_docs = competitor_data_retriever.get_relevant_documents("Extract key product features and specifications.")
+
+        if not user_docs or not competitor_docs:
+            raise HTTPException(status_code=400, detail="Insufficient data for comparison.")
+
+        # Construct system prompt with retrieved data
         system_prompt = (
             "You are an AI-powered competitor benchmarking assistant, designed to analyze and compare different products, "
             "whether hardware (e.g., smartphones, refrigerators, cars) or software (e.g., SaaS tools, AI applications, operating systems). "
@@ -173,17 +169,17 @@ def init_session():
             "- (Bullet points suggesting specific improvements based on weaknesses)\n\n"
 
             "Ensure responses remain structured, concise, and data-driven. If the retrieved context lacks information, state 'I don't have sufficient data to compare this feature.'\n\n"
-            f"User Product Data:\n{user_data_retriever}\n\nCompetitor Product Data:\n{competitor_data_retriever}"
+            f"User Product Data:\n{user_docs}\n\nCompetitor Product Data:\n{competitor_docs}"
         )
 
         response_message = model.invoke(system_prompt)
         response = {"message": response_message.content}
 
         return response
-    
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
