@@ -197,7 +197,7 @@ def init_session():
     response = None
 
     try:
-        model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3)
+        model = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.5)
 
         # Load data separately for user and competitor
         user_data_retriever = load_and_process_files("user")
@@ -237,7 +237,7 @@ def init_session():
             f"User Product Data:\n{user_docs}\n\nCompetitor Product Data:\n{competitor_docs}"
         )
 
-        response_message = watson_llm.invoke(system_prompt)
+        response_message = model.invoke(system_prompt)
         response = {"message": response_message}
 
         return response
@@ -248,5 +248,3 @@ def init_session():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=420)
-
-# done
